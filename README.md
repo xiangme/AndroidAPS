@@ -32,7 +32,8 @@ https://afdian.com/a/manong
   `STORE_FILE`: 你的安卓签名文件的路径。
   `STORE_PASSWORD`: 你的安卓签名文件的store密码。
 * 在Github Actions中触发编译
-* 下载`Artifacts`中的编译产物`aaps.zip` 
+* 下载`Artifacts`中的编译产物`aaps.zip`
+* 
 
 ### If your are NOT familiar with Android development:
 You need to get the secerts of the key store file to sign your application. For security reason, all of the passwords are NOT in this repoitory.
@@ -53,7 +54,7 @@ Please follow these steps:
 **强烈建议学习相关知识，编译完APK后，用你自己的签名文件签名。**
 请按如下步骤操作:
 * 克隆此代码仓库到你自己的Github账号
-* 扫描下方二维码关注“一型码农Lex”微信公众号。Scan the below QR code and subscribe "一型码农Lex" WeChat Channel.  
+*  扫描下方二维码关注“一型码农Lex”微信公众号。Scan the below QR code and subscribe "一型码农Lex" WeChat Channel.  
 <a href="/Documentation/wechat_qr.png"><img src="/Documentation/wechat_qr.png?raw=true" alt="WeChat Channel QR code" width="340"></a>  
 * 点击“一型码农Lex”微信公众号的中间菜单，获取入群二维码。进去索要签名文件的密码。
 * 在你克隆的仓库设置中的  `Actions secrets and variables` 选项中添加如下秘密环境变量：  
