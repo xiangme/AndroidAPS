@@ -1,0 +1,124 @@
+name: Sync Branch & Auto Build
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # 每15分钟检查一次上游更新
+  workflow_dispatch:        # 允许手动触发
+
+jobs:
+  sync-branch:
+    runs-on: ubuntu-latest
+    steps:
+    # 步骤1：检出基础分支（必须存在）
+    - name: Checkout base branch
+      uses: actions/checkout@v4
+      with:
+        ref: 'main'  # 使用您仓库中实际存在的基础分支
+        fetch-depth: 0  # 获取完整历史
+    
+    # 步骤2：创建或检出目标分支
+    - name: Prepare target branch
+      id: prepare-branch
+      run: |
+        # 检查目标分支是否存在
+        if git show-ref --quiet refs/heads/xiangme/AndroidAPS; then
+          echo "Target branch exists. Checking out..."
+          git checkout xiangme/AndroidAPS
+          echo "branch_existed=true" >> $GITHUB_OUTPUT
+        else
+          echo "Target branch does not exist. Creating..."
+          git checkout -b xiangme/AndroidAPS
+          echo "branch_existed=false" >> $GITHUB_OUTPUT
+          # 初始提交使分支有效
+          git commit --allow-empty -m "Initial commit for xiangme/AndroidAPS"
+          git push origin xiangme/AndroidAPS
+        fi
+        
+    # 步骤3：添加上游仓库
+    - name: Add upstream repository
+      run: |
+        git remote add upstream https://github.com/diyaps/AndroidAPS.git
+        git fetch upstream
+        
+    # 步骤4：检测上游更新
+    - name: Check for updates
+      id: check-updates
+      run: |
+        # 获取上游默认分支
+        DEFAULT_BRANCH=$(git remote show upstream | grep 'HEAD branch' | cut -d' ' -f5)
+        echo "Detected upstream default branch: $DEFAULT_BRANCH"
+        
+        # 获取上游最新提交
+        UPSTREAM_HASH=$(git rev-parse upstream/$DEFAULT_BRANCH)
+        # 获取当前分支最新提交
+        CURRENT_HASH=$(git rev-parse HEAD)
+        
+        echo "Upstream HEAD: $UPSTREAM_HASH"
+        echo "Current HEAD: $CURRENT_HASH"
+        
+        if [ "$UPSTREAM_HASH" != "$CURRENT_HASH" ]; then
+          echo "update_available=true" >> $GITHUB_OUTPUT
+          echo "Updates detected!"
+        else
+          echo "update_available=false" >> $GITHUB_OUTPUT
+          echo "No updates available"
+        fi
+        
+    # 步骤5：合并上游更新
+    - name: Merge upstream changes
+      if: steps.check-updates.outputs.update_available == 'true'
+      run: |
+        # 配置Git身份
+        git config --global user.email "actions@github.com"
+        git config --global user.name "GitHub Actions"
+        
+        # 获取上游默认分支
+        DEFAULT_BRANCH=$(git remote show upstream | grep 'HEAD branch' | cut -d' ' -f5)
+        
+        # 重置分支以解决可能的冲突
+        git reset --hard upstream/$DEFAULT_BRANCH
+        
+        # 强制推送到目标分支
+        git push origin xiangme/AndroidAPS --force
+        
+  auto-build:
+    needs: sync-branch
+    if: needs.sync-branch.outputs.update_available == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    # 检出目标分支
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: 'xiangme/AndroidAPS'
+        fetch-depth: 0
+    
+    # 设置Android编译环境
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+        
+    # 缓存Gradle依赖加速构建
+    - name: Cache Gradle dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+    
+    # 执行编译
+    - name: Build APK
+      run: ./gradlew assembleDebug
+      
+    # 上传编译结果
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: AndroidAPS-APK
+        path: app/build/outputs/apk/debug/
+        retention-days: 7  # 保留7天
