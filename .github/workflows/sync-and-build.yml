@@ -1,0 +1,81 @@
+name: Sync Branch & Auto Build
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # 每15分钟检查一次上游更新
+  workflow_dispatch:  # 手动触发按钮
+
+jobs:
+  sync-branch:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout current branch
+      uses: actions/checkout@v4
+      with:
+        ref: 'xiangme/AndroidAPS'  # 您的目标分支
+        fetch-depth: 0  # 获取完整提交历史
+        
+    - name: Add upstream repository
+      run: |
+        git remote add upstream https://github.com/diyaps/AndroidAPS.git
+        git fetch upstream
+        
+    - name: Check for updates
+      id: check-updates
+      run: |
+        # 获取上游默认分支（通常是main或master）
+        DEFAULT_BRANCH=$(git remote show upstream | grep 'HEAD branch' | cut -d' ' -f5)
+        echo "Detected upstream default branch: $DEFAULT_BRANCH"
+        
+        UPSTREAM_HASH=$(git rev-parse upstream/$DEFAULT_BRANCH)
+        CURRENT_HASH=$(git rev-parse HEAD)
+        
+        if [ "$UPSTREAM_HASH" != "$CURRENT_HASH" ]; then
+          echo "update_available=true" >> $GITHUB_OUTPUT
+          echo "Upstream has new commits!"
+        else
+          echo "update_available=false" >> $GITHUB_OUTPUT
+          echo "No updates found"
+        fi
+        
+    - name: Merge upstream changes
+      if: steps.check-updates.outputs.update_available == 'true'
+      run: |
+        # 自动检测上游默认分支
+        DEFAULT_BRANCH=$(git remote show upstream | grep 'HEAD branch' | cut -d' ' -f5)
+        
+        # 配置Git身份
+        git config --global user.email "actions@github.com"
+        git config --global user.name "GitHub Actions"
+        
+        # 合并上游变更
+        git merge upstream/$DEFAULT_BRANCH --no-edit -m "Merge upstream updates"
+        
+        # 推送更新到您的分支
+        git push origin xiangme/AndroidAPS
+        
+  auto-build:
+    needs: sync-branch
+    if: needs.sync-branch.outputs.update_available == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: 'xiangme/AndroidAPS'  # 编译您的分支
+        
+    # 设置Android编译环境
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+        
+    - name: Build APK
+      run: ./gradlew assembleDebug
+      
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: AndroidAPS-APK
+        path: app/build/outputs/apk/debug/
