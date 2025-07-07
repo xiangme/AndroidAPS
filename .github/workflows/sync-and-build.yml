@@ -1,116 +1,205 @@
-name: Sync Branch & Auto Build
+name: Sync Upstream & Auto Build
 
 on:
   schedule:
-    # 每周一UTC时间0点（北京时间周一8点）检查一次
-    - cron: '0 0 * * 1'
-  workflow_dispatch:
-    inputs:
-      force_build:
-        description: '强制编译（即使没有更新）'
-        required: false
-        type: boolean
-        default: false
+    - cron: '0 0 * * 0'  # 每周日 00:00 UTC 检查一次
+  workflow_dispatch:  # 手动触发按钮
 
 jobs:
-  sync-branch:
+  sync-upstream:
     runs-on: ubuntu-latest
     outputs:
       update_available: ${{ steps.check-updates.outputs.update_available }}
     steps:
-    # 步骤1：检出基础分支
-    - name: Checkout base branch
+    - name: Checkout forked repo
       uses: actions/checkout@v4
       with:
-        ref: 'main'
-        fetch-depth: 0
-    
-    # 步骤2：创建或检出目标分支
-    - name: Prepare target branch
-      id: prepare-branch
-      run: |
-        if git show-ref --quiet refs/heads/xiangme/AndroidAPS; then
-          echo "目标分支已存在，正在检出..."
-          git checkout xiangme/AndroidAPS
-        else
-          echo "目标分支不存在，正在创建..."
-          git checkout -b xiangme/AndroidAPS
-          git commit --allow-empty -m "初始化分支"
-          git push origin xiangme/AndroidAPS
-        fi
+        fetch-depth: 0  # 获取完整历史记录
+        token: ${{ secrets.GITHUB_TOKEN }}
         
-    # 步骤3：添加上游仓库
-    - name: Add upstream repository
+    - name: Add upstream remote
       run: |
         git remote add upstream https://github.com/diyaps/AndroidAPS.git
         git fetch upstream
         
-    # 步骤4：检测上游更新
     - name: Check for updates
       id: check-updates
       run: |
-        # 获取上游默认分支
-        DEFAULT_BRANCH=$(git remote show upstream | grep 'HEAD branch' | cut -d' ' -f5)
-        echo "上游默认分支: $DEFAULT_BRANCH"
+        # 获取上游 master 分支的最新提交
+        git fetch upstream master
+        UPSTREAM_HASH=$(git rev-parse upstream/master)
+        CURRENT_HASH=$(git rev-parse origin/master)
         
-        # 获取上游最新提交
-        git fetch upstream $DEFAULT_BRANCH
-        UPSTREAM_HASH=$(git rev-parse upstream/$DEFAULT_BRANCH)
+        echo "Upstream master hash: $UPSTREAM_HASH"
+        echo "Current master hash: $CURRENT_HASH"
         
-        # 获取当前分支最新提交
-        CURRENT_HASH=$(git rev-parse HEAD)
-        
-        echo "上游最新提交: $UPSTREAM_HASH"
-        echo "当前分支提交: $CURRENT_HASH"
-        
-        # 计算提交差异数量
-        COMMIT_DIFF=$(git rev-list $CURRENT_HASH..upstream/$DEFAULT_BRANCH --count)
-        echo "提交差异数量: $COMMIT_DIFF"
-        
-        if [ "$COMMIT_DIFF" -gt 0 ]; then
-          echo "检测到更新!"
+        if [ "$UPSTREAM_HASH" != "$CURRENT_HASH" ]; then
           echo "update_available=true" >> $GITHUB_OUTPUT
+          echo "✅ Updates available from upstream"
         else
-          echo "无新提交"
           echo "update_available=false" >> $GITHUB_OUTPUT
+          echo "ℹ️ No updates available"
         fi
         
-    # 步骤5：合并上游更新（如果有更新）
-    - name: Merge upstream changes
+    - name: Sync with upstream
       if: steps.check-updates.outputs.update_available == 'true'
       run: |
         git config --global user.email "actions@github.com"
         git config --global user.name "GitHub Actions"
         
-        DEFAULT_BRANCH=$(git remote show upstream | grep 'HEAD branch' | cut -d' ' -f5)
-        git reset --hard upstream/$DEFAULT_BRANCH
-        git push origin xiangme/AndroidAPS --force
+        # 切换到本地 master 分支
+        git checkout master
         
+        # 合并上游更改
+        git merge upstream/master --no-edit
+        
+        # 推送到 fork
+        git push origin master
+        
+        echo "✅ Successfully synced with upstream"
+
   auto-build:
-    needs: sync-branch
-    # 仅当有更新或手动强制编译时运行
-    if: |
-      needs.sync-branch.outputs.update_available == 'true' ||
-      github.event.inputs.force_build == 'true'
+    needs: sync-upstream
+    if: needs.sync-upstream.outputs.update_available == 'true'
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
+    - name: Checkout updated code
       uses: actions/checkout@v4
       with:
-        ref: 'xiangme/AndroidAPS'
-    
-    - name: Set up JDK 17
-      uses: actions/setup-java@v3
+        ref: master  # 使用刚刚同步的 master 分支
+        
+    - name: Set up JDK
+      uses: actions/setup-java@v4
       with:
         distribution: 'zulu'
         java-version: '17'
         
-    - name: Build APK
+    - name: Cache Gradle dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+        
+    - name: Grant execute permission for gradlew
+      run: chmod +x ./gradlew
+      
+    - name: Validate signing configuration
+      run: |
+        echo "Checking signing configuration..."
+        if [ -z "${{ secrets.KEY_ALIAS }}" ] || [ -z "${{ secrets.KEY_PASSWORD }}" ] || [ -z "${{ secrets.STORE_FILE }}" ] || [ -z "${{ secrets.STORE_PASSWORD }}" ]; then
+          echo "❌ Missing signing secrets. Please configure:"
+          echo "  - KEY_ALIAS"
+          echo "  - KEY_PASSWORD" 
+          echo "  - STORE_FILE"
+          echo "  - STORE_PASSWORD"
+          exit 1
+        fi
+        echo "✅ All signing secrets are configured"
+        
+    - name: Build Debug APK
       run: ./gradlew assembleDebug
       
-    - name: Upload APK artifact
-      uses: actions/upload-artifact@v3
+    - name: Build Release APK
+      run: ./gradlew assembleRelease
+      env:
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        STORE_FILE: ${{ secrets.STORE_FILE }}
+        STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+        
+    - name: Get APK info
+      id: apk-info
+      run: |
+        # 获取版本信息（如果 gradle 任务不存在则使用默认值）
+        VERSION_NAME=$(./gradlew -q printVersionName 2>/dev/null || echo "unknown")
+        VERSION_CODE=$(./gradlew -q printVersionCode 2>/dev/null || echo "0")
+        BUILD_DATE=$(date '+%Y%m%d_%H%M%S')
+        
+        echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_OUTPUT
+        echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_OUTPUT
+        echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_OUTPUT
+        
+        echo "📱 APK Info:"
+        echo "  Version Name: $VERSION_NAME"
+        echo "  Version Code: $VERSION_CODE"
+        echo "  Build Date: $BUILD_DATE"
+        
+    - name: Rename APK files
+      run: |
+        cd app/build/outputs/apk
+        
+        # 重命名 Debug APK
+        if [ -f debug/app-debug.apk ]; then
+          mv debug/app-debug.apk debug/AAPS-${{ steps.apk-info.outputs.VERSION_NAME }}-debug-${{ steps.apk-info.outputs.BUILD_DATE }}.apk
+        fi
+        
+        # 重命名 Release APK
+        if [ -f release/app-release.apk ]; then
+          mv release/app-release.apk release/AAPS-${{ steps.apk-info.outputs.VERSION_NAME }}-release-${{ steps.apk-info.outputs.BUILD_DATE }}.apk
+        fi
+        
+        # 显示文件列表
+        echo "📦 Generated APK files:"
+        find . -name "*.apk" -type f
+        
+    - name: Upload Debug APK
+      uses: actions/upload-artifact@v4
       with:
-        name: AndroidAPS-APK
-        path: app/build/outputs/apk/debug/
-        retention-days: 14  # 保留两周
+        name: AAPS-Debug-${{ steps.apk-info.outputs.VERSION_NAME }}-${{ github.run_number }}
+        path: app/build/outputs/apk/debug/*.apk
+        retention-days: 30
+        
+    - name: Upload Release APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: AAPS-Release-${{ steps.apk-info.outputs.VERSION_NAME }}-${{ github.run_number }}
+        path: app/build/outputs/apk/release/*.apk
+        retention-days: 30
+        
+    - name: Create Release ZIP
+      run: |
+        mkdir -p release_package
+        cp app/build/outputs/apk/debug/*.apk release_package/ 2>/dev/null || true
+        cp app/build/outputs/apk/release/*.apk release_package/ 2>/dev/null || true
+        
+        # 创建构建信息文件
+        cat > release_package/BUILD_INFO.txt << EOF
+        AAPS Build Information
+        =====================
+        Build Time: $(date)
+        Version Name: ${{ steps.apk-info.outputs.VERSION_NAME }}
+        Version Code: ${{ steps.apk-info.outputs.VERSION_CODE }}
+        GitHub Run: ${{ github.run_number }}
+        Commit: ${{ github.sha }}
+        
+        Files in this package:
+        $(ls -la release_package/*.apk)
+        EOF
+        
+        # 创建 ZIP 文件
+        cd release_package
+        zip -r ../aaps.zip *
+        
+    - name: Upload Release Package
+      uses: actions/upload-artifact@v4
+      with:
+        name: aaps-complete-${{ steps.apk-info.outputs.VERSION_NAME }}-${{ github.run_number }}
+        path: aaps.zip
+        retention-days: 90
+        
+    - name: Build Summary
+      run: |
+        echo "## 🎉 构建完成 Build Complete" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📱 APK 信息" >> $GITHUB_STEP_SUMMARY
+        echo "- **版本名称**: ${{ steps.apk-info.outputs.VERSION_NAME }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **版本代码**: ${{ steps.apk-info.outputs.VERSION_CODE }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **构建时间**: ${{ steps.apk-info.outputs.BUILD_DATE }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **构建编号**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📦 产物下载" >> $GITHUB_STEP_SUMMARY
+        echo "请前往 [Actions 页面](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) 下载构建产物。" >> $GITHUB_STEP_SUMMARY
