@@ -83,12 +83,16 @@ jobs:
       run: |
         echo "Checking signing secrets..."
         MISSING=0
-        for key in KEY_ALIAS KEY_PASSWORD STORE_FILE STORE_PASSWORD; do
-          if [ -z "${{ secrets[key] }}" ]; then
-            echo "⚠️ Missing: $key"; MISSING=1
-          fi
-        done
+        [ -z "$KEY_ALIAS" ] && echo "⚠️ Missing: KEY_ALIAS" && MISSING=1
+        [ -z "$KEY_PASSWORD" ] && echo "⚠️ Missing: KEY_PASSWORD" && MISSING=1
+        [ -z "$STORE_FILE" ] && echo "⚠️ Missing: STORE_FILE" && MISSING=1
+        [ -z "$STORE_PASSWORD" ] && echo "⚠️ Missing: STORE_PASSWORD" && MISSING=1
         [ "$MISSING" = 1 ] && echo "⚠️ Build will continue without signing."
+      env:
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        STORE_FILE: ${{ secrets.STORE_FILE }}
+        STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
 
     - name: Build Debug APK
       run: ./gradlew assembleDebug --no-build-cache
