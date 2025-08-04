@@ -66,6 +66,17 @@ jobs:
         distribution: 'zulu'
         java-version: '17'
 
+    # 自动创建签名配置
+    - name: Setup Signing Configuration
+      run: |
+        mkdir -p keystore
+        cat > keystore/demokeystore.jks << 'EOF'
+        <这里需要替换为您的Base64编码的keystore文件内容>
+        EOF
+        base64 -d keystore/demokeystore.jks > keystore/demokeystore_decoded.jks
+        mv keystore/demokeystore_decoded.jks keystore/demokeystore.jks
+        echo "✅ Signing keystore created"
+
     - name: Cache Gradle dependencies
       uses: actions/cache@v3
       with:
@@ -79,31 +90,16 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x ./gradlew
 
-    - name: Check for signing config (warn only)
-      run: |
-        echo "Checking signing secrets..."
-        MISSING=0
-        [ -z "$KEY_ALIAS" ] && echo "⚠️ Missing: KEY_ALIAS" && MISSING=1
-        [ -z "$KEY_PASSWORD" ] && echo "⚠️ Missing: KEY_PASSWORD" && MISSING=1
-        [ -z "$STORE_FILE" ] && echo "⚠️ Missing: STORE_FILE" && MISSING=1
-        [ -z "$STORE_PASSWORD" ] && echo "⚠️ Missing: STORE_PASSWORD" && MISSING=1
-        [ "$MISSING" = 1 ] && echo "⚠️ Build will continue without signing."
-      env:
-        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        STORE_FILE: ${{ secrets.STORE_FILE }}
-        STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-
     - name: Build Debug APK
       run: ./gradlew assembleDebug --no-build-cache
 
     - name: Build Release APK
       run: ./gradlew assembleRelease --no-build-cache
       env:
-        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        STORE_FILE: ${{ secrets.STORE_FILE }}
-        STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+        KEY_ALIAS: "DIYAPS"
+        KEY_PASSWORD: "diyapsdemo"
+        STORE_FILE: "keystore/demokeystore.jks"
+        STORE_PASSWORD: "diyapsdemo"
 
     - name: Get APK info
       id: apk-info
