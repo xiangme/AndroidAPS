@@ -6,207 +6,63 @@ on:
   workflow_dispatch:       # 手动触发
 
 jobs:
-  sync-upstream:
+  sync-and-build:
     runs-on: ubuntu-latest
-    outputs:
-      update_available: ${{ steps.check-updates.outputs.update_available }}
+
     steps:
-    - name: Checkout forked repo
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout Target Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Add upstream remote
-      run: |
-        git remote add upstream https://github.com/diyaps/AndroidAPS.git
-        git fetch upstream
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
 
-    - name: Check for updates
-      id: check-updates
-      run: |
-        git fetch upstream master
-        UPSTREAM_HASH=$(git rev-parse upstream/master)
-        CURRENT_HASH=$(git rev-parse origin/master)
+      - name: Add Upstream and Fetch
+        run: |
+          git remote add upstream https://github.com/MilosKozak/AndroidAPS.git
+          git fetch upstream
+          git merge upstream/master --allow-unrelated-histories -m "Merge upstream"
 
-        echo "Upstream master hash: $UPSTREAM_HASH"
-        echo "Current master hash: $CURRENT_HASH"
+      - name: Setup Java & Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-        if [ "$UPSTREAM_HASH" != "$CURRENT_HASH" ]; then
-          echo "update_available=true" >> $GITHUB_OUTPUT
-          echo "✅ Updates available from upstream"
-        else
-          echo "update_available=false" >> $GITHUB_OUTPUT
-          echo "ℹ️ No updates available"
-        fi
+      - name: Setup Gradle
+        uses: gradle/gradle-build-action@v2
 
-    - name: Sync with upstream
-      if: steps.check-updates.outputs.update_available == 'true'
-      run: |
-        git config --global user.email "actions@github.com"
-        git config --global user.name "GitHub Actions"
-        git checkout master
-        git merge upstream/master --no-edit
-        git push origin master
-        echo "✅ Successfully synced with upstream"
+      - name: Restore Keystore File
+        run: |
+          mkdir -p keystore
+          echo "Restoring keystore from base64..."
 
-  auto-build:
-    needs: sync-upstream
-    if: needs.sync-upstream.outputs.update_available == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout updated code
-      uses: actions/checkout@v4
-      with:
-        ref: master
+          CLEAN_BASE64=$(echo "${{ secrets.STORE_FILE }}" | tr -d '\n\r ')
+          echo "$CLEAN_BASE64" | base64 -d > keystore/demokeystore.jks
 
-    - name: Set up JDK
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'zulu'
-        java-version: '17'
+          FILE_SIZE=$(wc -c < keystore/demokeystore.jks)
+          echo "Keystore file size: $FILE_SIZE bytes"
 
-    # 修复的密钥库还原步骤
-    - name: Restore Keystore File
-      run: |
-        mkdir -p keystore
-        echo "Restoring keystore from base64..."
-        
-        # 添加调试信息
-        echo "Base64 content length: ${#STORE_FILE_CONTENT}"
-        echo "First 10 characters: ${STORE_FILE_CONTENT:0:10}"
-        
-        # 移除可能的多余空格和换行符
-        CLEAN_BASE64=$(echo -n "$STORE_FILE_CONTENT" | tr -d '\n\r ')
-        
-        # 尝试解码
-        if ! echo "$CLEAN_BASE64" | base64 -d > keystore/demokeystore.jks; then
-          echo "❌ Failed to decode base64 content"
-          echo "Base64 content: $CLEAN_BASE64"
-          exit 1
-        fi
-        
-        # 检查文件大小
-        FILE_SIZE=$(wc -c < "keystore/demokeystore.jks")
-        echo "Keystore file size: $FILE_SIZE bytes"
-        
-        if [ ! -f "keystore/demokeystore.jks" ] || [ "$FILE_SIZE" -lt 100 ]; then
-          echo "❌ Keystore file not created or too small"
-          exit 1
-        fi
-        
-        echo "✅ Keystore restored successfully"
-      env:
-        STORE_FILE_CONTENT: ${{ secrets.STORE_FILE }}
+          if [ ! -f "keystore/demokeystore.jks" ] || [ "$FILE_SIZE" -lt 100 ]; then
+            echo "❌ Keystore file not created or too small"
+            exit 1
+          fi
 
-    - name: Cache Gradle dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-        restore-keys: |
-          ${{ runner.os }}-gradle-
+          echo "✅ Keystore restored successfully"
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x ./gradlew
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --no-build-cache
+        env:
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_FILE: keystore/demokeystore.jks
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
 
-    - name: Check for signing config
-      run: |
-        echo "Checking signing configuration..."
-        
-        # 检查Secret是否存在
-        [ -z "$KEY_ALIAS" ] && echo "❌ Missing: KEY_ALIAS" && exit 1
-        [ -z "$KEY_PASSWORD" ] && echo "❌ Missing: KEY_PASSWORD" && exit 1
-        [ -z "$STORE_PASSWORD" ] && echo "❌ Missing: STORE_PASSWORD" && exit 1
-        
-        # 检查keystore文件是否存在
-        if [ ! -f "keystore/demokeystore.jks" ]; then
-          echo "❌ Keystore file not found!"
-          exit 1
-        fi
-        
-        echo "✅ All signing secrets and keystore present"
-      env:
-        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-
-    - name: Build Debug APK
-      run: ./gradlew assembleDebug --no-build-cache
-
-    - name: Build Release APK
-      run: ./gradlew assembleRelease --no-build-cache
-      env:
-        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        STORE_FILE: keystore/demokeystore.jks
-        STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-
-    - name: Get APK info
-      id: apk-info
-      run: |
-        VERSION_NAME=$(./gradlew -q printVersionName 2>/dev/null || echo "unknown")
-        VERSION_CODE=$(./gradlew -q printVersionCode 2>/dev/null || echo "0")
-        BUILD_DATE=$(date '+%Y%m%d_%H%M%S')
-        echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_OUTPUT
-        echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_OUTPUT
-        echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_OUTPUT
-
-    - name: Rename APKs
-      run: |
-        cd app/build/outputs/apk
-        find . -type f -name "*.apk"
-        if [ -f debug/app-debug.apk ]; then
-          mv debug/app-debug.apk debug/AAPS-${{ steps.apk-info.outputs.VERSION_NAME }}-debug-${{ steps.apk-info.outputs.BUILD_DATE }}.apk
-        fi
-        if [ -f release/app-release.apk ]; then
-          mv release/app-release.apk release/AAPS-${{ steps.apk-info.outputs.VERSION_NAME }}-release-${{ steps.apk-info.outputs.BUILD_DATE }}.apk
-        fi
-        find . -type f -name "*.apk"
-
-    - name: Upload Debug APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: AAPS-Debug-${{ steps.apk-info.outputs.VERSION_NAME }}-${{ github.run_number }}
-        path: app/build/outputs/apk/debug/*.apk
-        retention-days: 30
-
-    - name: Upload Release APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: AAPS-Release-${{ steps.apk-info.outputs.VERSION_NAME }}-${{ github.run_number }}
-        path: app/build/outputs/apk/release/*.apk
-        retention-days: 30
-
-    - name: Create Release ZIP
-      run: |
-        mkdir -p release_package
-        cp app/build/outputs/apk/debug/*.apk release_package/ 2>/dev/null || true
-        cp app/build/outputs/apk/release/*.apk release_package/ 2>/dev/null || true
-        cat > release_package/BUILD_INFO.txt << EOF
-        AAPS Build Info
-        ===============
-        Version Name: ${{ steps.apk-info.outputs.VERSION_NAME }}
-        Version Code: ${{ steps.apk-info.outputs.VERSION_CODE }}
-        Date: $(date)
-        Commit: ${{ github.sha }}
-        Run: ${{ github.run_number }}
-        EOF
-        cd release_package && zip -r ../aaps.zip *
-
-    - name: Upload ZIP
-      uses: actions/upload-artifact@v4
-      with:
-        name: aaps-complete-${{ steps.apk-info.outputs.VERSION_NAME }}-${{ github.run_number }}
-        path: aaps.zip
-        retention-days: 90
-
-    - name: Summary
-      run: |
-        echo "## ✅ Build Complete" >> $GITHUB_STEP_SUMMARY
-        echo "- Version: ${{ steps.apk-info.outputs.VERSION_NAME }}" >> $GITHUB_STEP_SUMMARY
-        echo "- Code: ${{ steps.apk-info.outputs.VERSION_CODE }}" >> $GITHUB_STEP_SUMMARY
-        echo "- Build Date: ${{ steps.apk-info.outputs.BUILD_DATE }}" >> $GITHUB_STEP_SUMMARY
-        echo "- [Artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AndroidAPS-Release-APK
+          path: app/build/outputs/apk/release/*.apk
