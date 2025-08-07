@@ -2,8 +2,8 @@ name: Sync Upstream & Auto Build
 
 on:
   schedule:
-    - cron: '0 0 */14 * *'  # 每14天触发一次（UTC 0点）
-  workflow_dispatch:       # 手动触发
+    - cron: '0 0 */14 * *'  # 每14天 UTC 0点触发
+  workflow_dispatch:         # 支持手动触发
 
 jobs:
   sync-and-build:
@@ -20,7 +20,7 @@ jobs:
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
 
-      - name: Add Upstream and Fetch
+      - name: Add Upstream and Merge
         run: |
           git remote add upstream https://github.com/diyaps/AndroidAPS.git
           git fetch upstream
@@ -39,9 +39,7 @@ jobs:
         run: |
           mkdir -p keystore
           echo "Restoring keystore from base64..."
-
-          CLEAN_BASE64=$(echo "${{ secrets.STORE_FILE }}" | tr -d '\n\r ')
-          echo "$CLEAN_BASE64" | base64 -d > keystore/demokeystore.jks
+          echo "${{ secrets.STORE_FILE }}" | tr -d '\n\r ' | base64 -d > keystore/demokeystore.jks
 
           FILE_SIZE=$(wc -c < keystore/demokeystore.jks)
           echo "Keystore file size: $FILE_SIZE bytes"
@@ -50,19 +48,22 @@ jobs:
             echo "❌ Keystore file not created or too small"
             exit 1
           fi
-
           echo "✅ Keystore restored successfully"
 
-      - name: Build Release APK
-        run: ./gradlew assembleRelease --no-build-cache
+      - name: Print Keystore Info (Debug)
+        run: |
+          keytool -list -keystore keystore/demokeystore.jks -storepass "${{ secrets.STORE_PASSWORD }}" || true
+
+      - name: Build APK (assembleFullRelease)
+        run: ./gradlew assembleFullRelease --no-build-cache
         env:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          STORE_FILE: keystore/demokeystore.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          STORE_FILE: keystore/demokeystore.jks
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AndroidAPS-Release-APK
-          path: app/build/outputs/apk/release/*.apk
+          name: AndroidAPS-FullRelease-APK
+          path: app/build/outputs/apk/full/release/*.apk
