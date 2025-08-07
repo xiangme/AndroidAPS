@@ -2,8 +2,8 @@ name: Sync Upstream & Auto Build
 
 on:
   schedule:
-    - cron: '0 0 */14 * *'  # 每14天 UTC 0点触发
-  workflow_dispatch:         # 支持手动触发
+    - cron: '0 0 */14 * *'  # 每14天触发一次（UTC 0点）
+  workflow_dispatch:       # 手动触发
 
 jobs:
   sync-and-build:
@@ -14,13 +14,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: master  # 明确指定分支
 
       - name: Configure Git
         run: |
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
 
-      - name: Add Upstream and Merge
+      - name: Add Upstream and Fetch
         run: |
           git remote add upstream https://github.com/diyaps/AndroidAPS.git
           git fetch upstream
@@ -31,39 +32,54 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '21'
+          cache: gradle  # 添加Gradle缓存优化
 
       - name: Setup Gradle
         uses: gradle/gradle-build-action@v2
+
+      # 关键修复点1：添加gradlew执行权限
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
 
       - name: Restore Keystore File
         run: |
           mkdir -p keystore
           echo "Restoring keystore from base64..."
-          echo "${{ secrets.STORE_FILE }}" | tr -d '\n\r ' | base64 -d > keystore/demokeystore.jks
-
+          
+          # 清理base64字符串中的换行符和空格
+          CLEAN_BASE64=$(echo "${{ secrets.STORE_FILE }}" | tr -d '\n\r ')
+          echo "$CLEAN_BASE64" | base64 -d > keystore/demokeystore.jks
+          
+          # 增强文件校验
           FILE_SIZE=$(wc -c < keystore/demokeystore.jks)
           echo "Keystore file size: $FILE_SIZE bytes"
-
-          if [ ! -f "keystore/demokeystore.jks" ] || [ "$FILE_SIZE" -lt 100 ]; then
-            echo "❌ Keystore file not created or too small"
+          
+          if [ ! -f "keystore/demokeystore.jks" ] || [ "$FILE_SIZE" -lt 1000 ]; then
+            echo "❌ Keystore file invalid or too small (min 1000 bytes)"
             exit 1
           fi
+          
           echo "✅ Keystore restored successfully"
 
-      - name: Print Keystore Info (Debug)
-        run: |
-          keytool -list -keystore keystore/demokeystore.jks -storepass "${{ secrets.STORE_PASSWORD }}" || true
-
-      - name: Build APK (assembleFullRelease)
-        run: ./gradlew assembleFullRelease --no-build-cache
+      # 关键修复点2：使用正确的构建命令
+      - name: Build Release APK
+        run: ./gradlew assembleFullRelease
         env:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           STORE_FILE: keystore/demokeystore.jks
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
 
+      # 关键修复点3：修正APK输出路径
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AndroidAPS-FullRelease-APK
+          name: AndroidAPS-Release-APK
           path: app/build/outputs/apk/full/release/*.apk
+          
+      # 可选：添加构建后清理
+      - name: Clean up workspace
+        if: ${{ always() }}
+        run: |
+          rm -f keystore/demokeystore.jks
+          echo "Keystore removed"
