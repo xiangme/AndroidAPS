@@ -40,7 +40,7 @@ jobs:
       - name: Restore Keystore
         run: |
           mkdir -p keystore
-          echo "${{ secrets.STORE_FILE }}" | tr -d '\n\r ' | base64 --decode > keystore/demokeystore.jks
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > keystore/demokeystore.jks
           FILE_SIZE=$(wc -c < keystore/demokeystore.jks)
           echo "Keystore size: $FILE_SIZE bytes"
           if [ ! -f keystore/demokeystore.jks ] || [ "$FILE_SIZE" -lt 1000 ]; then
@@ -53,8 +53,10 @@ jobs:
         env:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          # build.gradle 中引用 storeFile 需要的是文件路径
+          # 所以直接写死路径
           STORE_FILE: keystore/demokeystore.jks
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
