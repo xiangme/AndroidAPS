@@ -1,48 +1,57 @@
-name: Build AndroidAPS APK
+android {
+    namespace = "info.nightscout.androidaps"
+    compileSdk = 34
+    
+    defaultConfig {
+        applicationId = "info.nightscout.androidaps"
+        minSdk = 23
+        targetSdk = 34
+        versionCode = 23001
+        versionName = "3.0.0.1"
+        
+        // 添加构建配置字段
+        buildConfigField("boolean", "CI_BUILD", System.getenv("CI") ?: "false")
+    }
 
-on:
-  push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
-  workflow_dispatch:
+    signingConfigs {
+        create("release") {
+            // 从环境变量获取签名配置
+            storeFile = file(System.getenv("STORE_FILE") ?: "release.keystore")
+            storePassword = System.getenv("STORE_PASSWORD") ?: ""
+            keyAlias = System.getenv("KEY_ALIAS") ?: ""
+            keyPassword = System.getenv("KEY_PASSWORD") ?: ""
+        }
+    }
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // 应用签名配置
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
 
-    env:
-      STORE_FILE: release.keystore
-      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+    // 添加构建特性
+    buildFeatures {
+        buildConfig = true
+    }
 
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+    compileOptions {
+        // 设置Java兼容版本
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
 
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
 
-      - name: Decode keystore
-        run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > $STORE_FILE
-          mkdir -p keystore
-          mv $STORE_FILE keystore/$STORE_FILE
-
-      - name: Grant execute permissions to Gradle wrapper
-        run: chmod +x ./gradlew
-
-      - name: Build APK
-        run: ./gradlew assembleFullRelease
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: AndroidAPS-FullRelease-APK
-          path: app/build/outputs/apk/full/release/*.apk
+dependencies {
+    // 确保使用最新版本的依赖
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("com.google.android.material:material:1.11.0")
+    // 添加其他必要依赖...
+}
