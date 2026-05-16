@@ -214,6 +214,7 @@ jobs:
       - name: Switch to selected tag
         run: |
           git checkout refs/tags/${{ github.event.inputs.tagName }}
+          git clean -fd
           echo "✅ Checked out tag ${{ github.event.inputs.tagName }}"
 
       - name: Set BUILD_VARIANT
