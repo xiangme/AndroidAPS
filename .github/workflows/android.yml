@@ -5,6 +5,7 @@ on:
     branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -23,30 +24,6 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    # ========== 新增：生成一个临时的、有效的密钥库 ==========
-    - name: Generate temporary keystore
-      run: |
-        # 删除原有的无效密钥库（如果存在）
-        rm -f keystore/demokeystore.jks
-        # 创建 keystore 目录（如果不存在）
-        mkdir -p keystore
-        # 生成一个新的密钥库，有效期 10000 天，密码和别名均固定为 temp_xxx
-        keytool -genkey -v \
-          -keystore keystore/demokeystore.jks \
-          -alias temp_alias \
-          -keyalg RSA \
-          -keysize 2048 \
-          -validity 10000 \
-          -storepass temp_store_pass \
-          -keypass temp_key_pass \
-          -dname "CN=AAPS, OU=CI, O=GitHub, L=Internet, ST=World, C=WW"
-        echo "✅ 临时密钥库已生成: keystore/demokeystore.jks"
-        # 将密码和别名保存为环境变量，供后续 Gradle 命令使用
-        echo "STORE_PASS=temp_store_pass" >> $GITHUB_ENV
-        echo "KEY_ALIAS=temp_alias" >> $GITHUB_ENV
-        echo "KEY_PASS=temp_key_pass" >> $GITHUB_ENV
-
-    # ========== 修改原有的 Build 步骤：添加签名注入参数 ==========
     - name: Build with Gradle
       run: |
         ./gradlew assembleFullRelease \
@@ -57,12 +34,12 @@ jobs:
           -Dorg.gradle.workers.max=8 \
           -Dorg.gradle.caching=true \
           -Pandroid.injected.signing.store.file="${{ github.workspace }}/keystore/demokeystore.jks" \
-          -Pandroid.injected.signing.store.password="${{ env.STORE_PASS }}" \
-          -Pandroid.injected.signing.key.alias="${{ env.KEY_ALIAS }}" \
-          -Pandroid.injected.signing.key.password="${{ env.KEY_PASS }}"
+          -Pandroid.injected.signing.store.password="diyapsdemo" \
+          -Pandroid.injected.signing.key.alias="DIYAPS" \
+          -Pandroid.injected.signing.key.password="diyapsdemo"
 
     - name: Archive production artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: aaps
-        path: app/build/outputs/apk/full/release
+        name: aaps-${{ github.run_number }}
+        path: app/build/outputs/apk/full/release/*.apk
